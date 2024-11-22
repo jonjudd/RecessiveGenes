@@ -1,0 +1,298 @@
+---
+title: "Formatting Gene Data" 
+author: "Jon Judd" 
+output: pdf_document 
+---
+
+The goal of this document is to create a centralized file of all and recessive genes that includes the gene symbol, ensembl ID, S_het, pLot, mutational length.
+
+I will then take this file and then use effect sizes from burden tests to make plots modeling selection
+
+# Packages
+
+```{r}
+rm(list = ls())
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(readxl)
+library(purrr)
+library(tibble)
+library(stringr)
+library(forcats)
+library(httr)
+library(jsonlite)
+```
+
+# Loading base files
+
+Let's start by just loading the requied files I have. I am not going to include 
+burden results yet since those are in separate Nikhil file's
+
+```{r}
+# Load my 3 gene lists
+universe_genes = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_lists/universe_genelist.tsv", col_names = F)
+recessive_genes = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_lists/recessive_genelist.tsv", col_names = F)
+recessive_lethal_genes = read_excel("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_lists/recessive_lethal_genelist.xlsx")
+
+# These gene lists all have a singlular issue with GBA1 being labeled as GBA, I need to fix this
+universe_genes = universe_genes %>% mutate(X1 = if_else(X1 == "GBA", "GBA1", X1))
+recessive_genes = recessive_genes %>% mutate(X1 = if_else(X1 == "GBA", "GBA1", X1))
+recessive_lethal_genes = recessive_lethal_genes%>% mutate(Gene = if_else(Gene == "GBA", "GBA1", Gene))
+
+# Load the gene symbol to ensemble file
+symbol_conversion = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_lists/symbol_ensembl_conversion.txt")
+
+# Now load the required data relating to gene selection
+shets = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/selection_data/s_het_estimates.genebayes.tsv")
+targetsizes_plof = read_csv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/selection_data/mutational_target_sizes_005.csv")
+```
+
+
+# Refine Recessive Gene List
+The current recessive genes list offered by the MacArthur lab that I'm using is a bit vague and doesn't match up with OMIM data exactly. For this reason, I am going to match the gene list to specific autosomal/x-linked recessive genes using the OMIM API
+
+I basically need to go gene by gene to see if they have a autosomal recessive disease linked to them in OMIM and no dominant diseases
+
+```{r}
+# Let's define some things
+# Base API and key
+api_key = "tcjE1WBLQhOKGi9ePsmtjA"
+base_url = "https://api.omim.org/api/geneMap/search"
+
+# Now pull all the genes that need to be checked
+rec_genes = recessive_genes$X1
+
+# String to save data as well as genes to save genes without proper informaiton
+macarthur_verified_genes = character()
+macarthur_verified_traits = data.frame()
+
+# Loop through increments of the entries
+for (gene in rec_genes){
+
+  #Define some entry parameters
+  params = list(
+    search = gene,
+    apiKey = api_key,
+    format = "json",
+    start = "0",
+    limit = "100"
+  )
+  
+  # Get data
+  response = GET(url = base_url, query = params)
+  # Parse JSON content
+  data <- fromJSON(content(response, "text"))
+  #Get Gene specific data
+  geneData = data$omim$searchResponse$geneMapList$geneMap
+  
+  # I want to go to the next gene if there is no gene or phenotype data
+  if (is_empty(geneData)) {
+    next
+  }
+  if (is_empty(geneData$phenotypeMapList)){
+    next
+  }
+  
+  # Extract relevant phenotype data
+  phenotypes = geneData$phenotypeMapList %>% 
+    map_dfr(., ~as_tibble(.x)) %>% 
+    unnest(cols = everything())
+  
+  # Figure out the inheritance patterns
+  inheritance = phenotypes$phenotypeInheritance
+  
+  # Add to external gene list if the gene leads to Autosomal recessive disease
+  if ("Autosomal recessive" %in% inheritance && 
+      !any(str_detect(inheritance, "dominant"), na.rm = T)) {
+    
+    # Save the gene name
+    macarthur_verified_genes = str_c(c(macarthur_verified_genes, gene))
+    
+    # Save the gene with the phenotypes and add a phenotypic series column and just make it null if something doesn't exist
+    if (!("phenotypicSeriesNumber" %in% colnames(phenotypes))) {
+        phenotypes = cbind(phenotypes,
+                           "phenotypicSeriesNumber" = NA)
+    }
+    # Add on the gene name so I know how they are matched up
+    phenotypes = phenotypes %>% 
+      cbind(Gene = gene, .)
+    
+    # Save the phenotypes
+    macarthur_verified_traits = rbind(macarthur_verified_traits,
+                               phenotypes)
+  }
+}
+
+# Unique recessive genes
+macarthur_verified_genes = macarthur_verified_genes %>% 
+  unique() %>% 
+  sort(.)
+
+# Unique recessive phenotypes
+macarthur_verified_traits = macarthur_verified_traits %>% 
+  filter(!str_detect(phenotype, "\\?"),
+         !str_detect(phenotype, "\\["),
+         !str_detect(phenotype, "\\{")) %>% 
+  unique(.) 
+
+```
+
+
+# Alternate Recessive Gene List
+I'm increasingly doubting the original list of genes offered by the MacArthur gene list so I'm going to create a new list of recessive genes where I basically go through all the entries of OMIM and save all the genes that cause "Autosomal recessive" traits and no dominant traits
+```{r}
+# Let's define some things
+# Base API and key
+api_key = "tcjE1WBLQhOKGi9ePsmtjA"
+base_url = "https://api.omim.org/api/geneMap/search"
+
+
+# String to save data as well as genes to save genes without proper informaiton
+omim_rec_genes = character()
+omim_rec_phenotypes = data.frame()
+
+# Loop through increments of the entries for all 18,577 OMIM entries
+for (segment in seq(0, 18577 - 1, by = 100)) { 
+
+  # Check where I am
+  message("Current Segment:", segment)
+  
+  #Define some entry parameters
+  params = list(
+    search = "*",
+    apiKey = api_key,
+    format = "json",
+    start = segment,
+    limit = "100"
+  )
+  
+  # Get data
+  response = GET(url = base_url, query = params)
+  # Parse JSON content
+  data <- fromJSON(content(response, "text"))
+  # Pull all gene data
+  geneData = data$omim$searchResponse$geneMapList$geneMap
+  
+  # And then I want to search through each gene entry to see if they match my interested phenotype criteria
+  for (gene in 1:nrow(geneData)){
+  
+    # Pull the current gene being searched
+    curr_gene = geneData$approvedGeneSymbols[gene]
+    
+    # I want to go to the next gene if there is no phenotype data
+    if (is.null(geneData$phenotypeMapList[[gene]])){
+      next
+    }
+    
+    # Extract relevant phenotype data
+    phenotypes = geneData$phenotypeMapList[gene] %>% 
+      map_dfr(., ~as_tibble(.x)) %>% 
+      unnest(cols = everything())
+    
+    # Pull inheritance patterns
+    inheritance = phenotypes$phenotypeInheritance
+    
+    # Add to external gene list if the gene leads to Autosomal recessive disease
+    if ("Autosomal recessive" %in% inheritance && 
+        !any(str_detect(inheritance, "dominant"), na.rm = T)) {
+      
+      # Save the gene name
+      omim_rec_genes = str_c(c(omim_rec_genes, curr_gene))
+      
+      # Save the gene with the phenotypes and add a phenotypic series column and just make it null if something doesn't exist
+      if (!("phenotypicSeriesNumber" %in% colnames(phenotypes))) {
+          phenotypes = cbind(phenotypes,
+                             "phenotypicSeriesNumber" = NA)
+      }
+      # Add on the gene name so I know how they are matched up
+      phenotypes = phenotypes %>% 
+        cbind(Gene = curr_gene, .)
+      
+      # Save the phenotypes
+      omim_rec_phenotypes = rbind(omim_rec_phenotypes,
+                                 phenotypes)
+    }
+  }
+}
+
+# Unique recessive genes
+omim_rec_genes = omim_rec_genes %>% 
+  unique() %>% 
+  sort(.)
+
+# Unique recessive phenotypes
+omim_rec_phenotypes = omim_rec_phenotypes %>% 
+  filter(!str_detect(phenotype, "\\?"),
+         !str_detect(phenotype, "\\["),
+         !str_detect(phenotype, "\\{")) %>% 
+  unique(.) 
+
+
+```
+
+
+And then I want a quick section to compare the results from the two analyses looking at how to pick a gene list
+```{r}
+print(
+  paste0("According to the MacArthur list of recessive genes verified through OMIM, there are: ",
+      (macarthur_verified_genes %>% length(.)), " unique genes and ",
+      (macarthur_verified_traits %>% pull(phenotypeMimNumber) %>% unique() %>% length()), " unique traits."
+      )
+)
+
+print(
+  paste0("According to a search through all of OMIM, there are: ",
+      (omim_rec_genes %>% length(.)), " unique genes and ",
+      (omim_rec_phenotypes %>% pull(phenotypeMimNumber) %>% unique() %>% length()), " unique traits."
+      )
+)
+```
+
+
+
+# Combine metrics
+
+With everything loaded, I now have the opportunity to merge them together and then
+note which genes in the universe of genes are recessive
+
+The list of recessive genes are those that I just went and verified through OMIM
+
+```{r}
+# Quick formatting thing. I only need the gene symbols and ensembl id's from the conversion file
+symbol_ensembl = symbol_conversion %>% select(`Approved symbol`, `Ensembl gene ID`)
+
+# Start with the universe gene list, merge on the sybmol_conversion, and then add shets and target sizes
+merged_dataset = universe_genes %>% 
+  rename(symbol = X1) %>% 
+  left_join(symbol_ensembl, by = c("symbol" = 'Approved symbol')) %>% 
+  rename(ensg = 'Ensembl gene ID') %>% 
+  left_join(shets, by = c('ensg' = 'ensg')) %>% 
+  left_join(targetsizes_plof, by = c('ensg' = 'gene'))
+
+# I need sqrt of the mutational target size so I will also include that
+merged_dataset = merged_dataset %>% mutate(sqrt_mt = sqrt(mutational_target_size))
+
+# And lastly, I want to also annotate which of these genes are part of the verified recessive gene list and if they are part of the recessive lethal genelist
+merged_dataset = merged_dataset %>% 
+  mutate(macarthur_rec = factor(ifelse(symbol %in% macarthur_verified_genes, 1, 0)),
+         omim_rec = factor(ifelse(symbol %in% omim_rec_genes, 1, 0)),
+         rec_lethal = factor(ifelse(symbol %in% recessive_lethal_genes$Gene, 1, 0)))
+```
+
+Quick testing plot code
+```{r}
+ggplot(merged_dataset) +
+  geom_point(aes(x = sqrt_mt, y = aggregate_lof_frequency, colour = macarthur_rec)) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  theme_minimal()
+```
+
+# Output data
+
+Let's save this dataset and then use it later on in case I want to generate new datasets
+```{r}
+write_tsv(merged_dataset, "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_selection_datasets/gene_selection_data_2024.11.22.tsv")
+```

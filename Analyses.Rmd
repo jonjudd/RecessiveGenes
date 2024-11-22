@@ -1,0 +1,995 @@
+---
+title: "Analyses" 
+author: "Jon Judd" 
+output: pdf_document 
+---
+
+The goal of this analysis file is to take the merged selection data from the "FormattingGeneData.Rmd" file and plot
+- Square-root mutational target vs pLof
+- Shet vs bias-corrected burden test squared-effect-sizes
+
+The file from formatting data should be all I need for the first one and then I can use Nikhil's burden tests for the second
+
+# Load Packages
+
+```{r setup}
+# Reset the environment 
+rm(list = ls())
+
+# Load Base Packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(purrr)
+library(tibble)
+library(stringr)
+library(forcats)
+library(data.table)
+library(ggrepel)
+library(PhenoExam)
+
+#BioConductor Packages
+library(BiocManager)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(KEGGREST)
+library(biomaRt)
+
+# Make sure future output isn't shown here
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, results = "hide")
+```
+
+# Essential Preliminary Dataset Manipulation
+
+## Load Datasets
+
+I only need to load the gene_selection_data that includes selection information as well as the burden test data
+
+```{r}
+# Load the selection and gene information
+gene_selection_raw = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_selection_datasets/gene_selection_data_2024.11.22.tsv")
+
+# Load the burden test results.  This is specifically the burden tests that Nikhil have run on UKB traits and using the 2nd mask of LoF variants for the tests
+burden_tests_raw = fread("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/processed_burden_tests/processed_burden_tests_m2.tsv",
+                     sep = "\t")
+
+# And then I want to download omim phenotypes
+omim_raw <- read_delim("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/omim_phenotypes_8.16.24.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+```
+
+## Manipulate datasets
+
+I want to slighly modify these files for the following plots I'll just do that at the top
+
+I want to slightly modify the gene_selection dataframe to include a variable of genes that do and don't break the theoretical S=1 barrier. I can do this by dividing pLoF over squareroot mutational target
+
+I will also include a new variable to define "pure" vs "not" vs "mixed" recessive status based on these analytical methods and plots that I will have
+
+```{r}
+gene_selection = gene_selection_raw %>% 
+  dplyr::select(!c(chrom:prior_mean, post_lower_95:post_upper_95)) %>% 
+  dplyr::rename(pLoF = aggregate_lof_frequency,
+         s_het = post_mean) %>% 
+  mutate(pLoF_muL = pLoF/sqrt_mt) %>% 
+  mutate(pLoF_shet = pLoF/s_het) %>% 
+  mutate(analytical_recessive =  case_when(pLoF_muL > 1 & pLoF_shet > 1 ~ "Pure",  
+                                           pLoF_muL < 1 & pLoF_shet < 1 ~ "Not",
+                                           TRUE ~ "Mixed")
+         )
+```
+
+I also want to slightly modify the burden tests and then add on these results to the gene selection data. Though i am going to keep this as the burden tests varaible for simplicity
+
+```{r}
+# I then want to slighly modify the burden test file that I previously loaded. I first want to remove singleton effects and also calculate the bias-corrected effect squared
+burden_tests = burden_tests_raw %>% 
+  dplyr::rename(ensg = ID) %>% 
+  filter(str_detect(MASK, "singleton", negate = T)) %>% 
+  mutate(ensg = str_split_i(ensg, "[.]", 1),
+         bc_effect_sqr = BETA^2 - SE^2)
+
+# And then I merge on the burden tests to the rest of gene selection data
+burden_tests = gene_selection %>% left_join(burden_tests)
+```
+
+And then I want to take the omim data and simplify it so that each gene gets it's own phenotype
+
+```{r}
+# First off, I only care about the phenotype and gene columns
+omim = omim_raw %>% 
+  dplyr::select(Phenotype, `Gene/Locus And Other Related Symbols`) %>% 
+  dplyr::rename(gene = 'Gene/Locus And Other Related Symbols')
+
+# And then each gene needs it's own row with the phenotype
+omim = omim %>% separate_rows(gene, sep = ", ")
+
+# And then I only want genes that are accepted by hgnc, which are listed in my normal gene_selection df
+omim = omim %>% filter(gene %in% gene_selection$symbol)
+
+# And then I want to add on pLoF/sqrt(mu*L) estimate of selection to more easily figure out which genes break the curve and their phenotype
+omim = gene_selection %>% 
+  dplyr::select(symbol, pLoF_muL, pLoF_shet, recessive, rec_lethal, analytical_recessive) %>% unique() %>% 
+  left_join(omim, ., by = c("gene" = "symbol"))
+  
+```
+
+
+## Reset prior to other analyses
+
+Before I start working on other analyzes, I want to remove unnecessary variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+
+# Plotting mutational target vs pLoF
+
+If I assume that the recessive genes only affect homozygotes then they are bounded by 1 when we model squareroot mutational target vs pLoF. If points fall below y=x then there is a non-recessive effect, likely in a quantitative trait
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Plotting datasets
+
+Make the necessary plotting datasets or at least pull the necessary and unique rows
+```{r}
+plotting_df = gene_selection %>% 
+  select(sqrt_mt, pLoF, pLoF_muL, recessive, rec_lethal, symbol) %>% 
+  unique()
+```
+
+
+
+## Actually plotting data
+
+I have this data in my merged dataset, let me plot it
+```{r}
+# Let's just plot this with all genes separating the color if it's recessive or not
+all = gene_selection %>% 
+ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(recessive))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Expected vs Observed LoF mutations",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Gene?") +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# Let's show just recessive
+recessive = gene_selection %>% filter(recessive == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(recessive))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Expected vs Observed LoF mutations",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Gene?") +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+```
+
+I also have a variable that indicates if the gene is recessive lethal. I want to make more of these plots where I now show these recessive lethal genes and compare that to recessive genes that are not lethal
+
+```{r}
+# Plotting recessive genes and differentiating based on recessive lethal
+recessive_only = gene_selection %>% filter(recessive == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Expected vs Observed LoF mutations - All Recessive Genes",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# now plotting only the recessive lethal genes
+recessive_lethal = gene_selection %>% filter(rec_lethal == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Expected vs Observed LoF mutations - Only Recessive Lethal",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+```
+
+## Plot with labels
+
+I also want to create a set of plots with labels of the genes. I'm only going to do this for the last 2 plots I made of just recessive genes
+
+```{r}
+# I need to create a slightly specific plotting_df for these labeled plots
+plotting_df = gene_selection %>% 
+  filter(recessive == 1) %>% 
+  na.omit()
+
+# Now plotting recessive genes
+recessive_only_labeled = plotting_df %>%  
+  ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_text_repel(
+      data = filter(plotting_df, pLoF_muL > 1),
+      aes(x = sqrt_mt, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Expected vs Observed LoF mutations - All Recessive Genes",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# now plotting only the recessive lethal genes
+recessive_lethal_labeled = plotting_df %>% filter(rec_lethal == 1) %>% 
+  ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_text_repel(
+      data = filter(plotting_df, rec_lethal == 1, pLoF_muL < 1),
+      aes(x = sqrt_mt, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Expected vs Observed LoF mutations - Only Recessive Lethal",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+```
+
+## Specialty plots
+
+I also want a section of plots where I specifically plot genes that are of interest to me
+
+The first of these plots I want is specificaly balancing selection genes. I will only plot those genes on these same axes. I specifically want Sickle Cell, Cystic Fibrosis, Tay-Sachs, and Gaucher genes. 
+```{r}
+plotting_balanced = gene_selection %>% 
+  filter(symbol %in% c("HBB", "CFTR", "FCGR2A", "TGFB1", "HEXA", "GBA", "PAH"))
+
+balancing_labeled = plotting_balanced %>%  
+  ggplot(.) +
+  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_text_repel(
+      data = plotting_balanced,
+      aes(x = sqrt_mt, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 30 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Expected vs Observed LoF mutations - All Recessive Genes",
+       x = "Squareroot Mutational Target",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+```
+
+
+
+# Plotting Shet vs bias-corrected effect sizes
+
+Alright, now I want to plot out the association between Shet and effect sizes. Theoretically, all the recessive genes will have Shet = 0, but they will probably have Shet > 0 due to how GeneBayes work and because we assume there are het effects.
+
+However, we expect this curve and the burden test effect sizes to be lower for the recessive genes compared to the universe of all genes
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Actually plotting data
+
+To make the plot, I need to bin the genes into bins to reduce noise. I plan to make 100 bins based on increasing S_het and then calculate the average S_het and bias-corrects effects squared per bin. I will use this data to plot
+
+```{r}
+# Let' start by taking the important columns from the gene_selection df
+plotting_df = burden_tests %>% 
+  select(ensg, s_het, bc_effect_sqr, recessive, rec_lethal) %>% 
+  unique() %>% na.omit() %>% 
+  # These results are super noisy so I need to create bins of my genes. I want to bin on recessive status before anything 
+  arrange(s_het) %>%
+  group_by(recessive) %>% 
+  mutate(bin = cut_number(s_het, n = 100, labels = FALSE)) %>% 
+  # Now group on bin along with the gene statuses to calculate shet and effect
+  group_by(bin, recessive, rec_lethal) %>% 
+  mutate(bin_shet = mean(s_het),
+         bin_effect = mean(bc_effect_sqr)) %>% 
+  ungroup() %>% 
+  # And now pull realy the only columns I need for plotting
+  select(bin, bin_shet, bin_effect, recessive, rec_lethal) %>%
+  unique()
+```
+
+
+## Actually plotting
+
+With this information, I can now plot this. I will do similar to the previous set of plots where I will look at all genes, then recessive genes, and then recessive lethal genes
+
+```{r}
+# First all genes
+all_genes = plotting_df %>% 
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
+  geom_point() + 
+  geom_smooth( method = "loess", se = FALSE) +
+  labs(title = "Gene Selection vs Observed Effect Size",
+       x = "Mean S_het in bin",
+       y = "Mean Bias-Corrected Effect Squared",
+       color = "Recessive Gene?") + 
+  scale_x_log10() +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# And then only look at recessive genes
+all_recessive = plotting_df %>% filter(recessive == 1) %>% 
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
+  geom_point() + 
+  geom_smooth( method = "loess", se = FALSE) +
+  labs(title = "Gene Selection vs Observed Effect Size",
+       x = "Mean S_het in bin",
+       y = "Mean Bias-Corrected Effect Squared",
+       color = "Recessive Gene?") + 
+  scale_x_log10() +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# And now look at separation between recessive and recessive lethal
+recessive_plus_lethal = plotting_df %>% filter(recessive == 1) %>% 
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
+  geom_point() + 
+  geom_smooth( method = "loess", se = FALSE) +
+  labs(title = "Gene Selection vs Observed Effect Size - All Recessive Genes",
+       x = "Mean S_het in bin",
+       y = "Mean Bias-Corrected Effect Squared",
+       color = "Recessive Lethal Gene?") + 
+  scale_x_log10() +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# And then just recessive lethal genes
+only_lethal = plotting_df %>% filter(rec_lethal == 1) %>% 
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
+  geom_point() + 
+  geom_smooth( method = "loess", se = FALSE) +
+  labs(title = "Gene Selection vs Observed Effect Size - All Recessive Genes",
+       x = "Mean S_het in bin",
+       y = "Mean Bias-Corrected Effect Squared",
+       color = "Recessive Lethal Gene?") + 
+  scale_x_log10() +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+```
+
+
+# Plotting S_het vs pLoF
+
+Now that we see that there is some sort of het effect, I want to figure out how much of the selection effects is due to hets or homozygotes. I can figure that out by plotting S_het vs pLoF. 
+
+I'm going to make the same types of above plots, but changing the axes. Being above the y=x line is mostly homozygotes selections and below is mostly hets selection 
+
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Actual Plotting
+
+Now the actual plots using this plotting data
+
+```{r}
+# Let's just plot this with all genes separating the color if it's recessive or not
+all = gene_selection %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(recessive))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Gene?") +
+  xlim(0, 0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# Let's show just recessive
+recessive = gene_selection %>% filter(recessive == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(recessive))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Gene?") +
+  xlim(0, 0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# Plotting recessive genes and differentiating based on recessive lethal
+recessive_only = gene_selection %>% filter(recessive == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - All Recessive Genes",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0,0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+ # now plotting only the recessive lethal genes
+recessive_lethal = gene_selection %>% filter(rec_lethal == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - Only Recessive Lethal",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0, 0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+```
+
+
+## Plotting genes with labels
+
+I also want to make another version of these plots where I label the recessive genes where a majority of the selection is on homozygotes. This means genes that fall above the line
+
+I want to do this only for the all recessive genes plot and the recessive letahl genes plot
+
+```{r}
+# Plotting recessive genes and differentiating based on recessive lethal WITH LABELS
+recessive_labeled = gene_selection %>% filter(recessive == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") + 
+  geom_text_repel(
+      data = filter(gene_selection, recessive == 1, pLoF_shet > 1),
+      aes(x = s_het, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - All Recessive Genes",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0,0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# now plotting only the recessive lethal genes With LABELS
+lethal_labeled = gene_selection %>% filter(rec_lethal == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_text_repel(
+      data = filter(gene_selection, rec_lethal == 1, pLoF_shet > 1),
+      aes(x = s_het, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - Only Recessive Lethal",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0, 0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+```
+
+
+
+# Analysing Diseases
+
+Now that I have a list of genes that are breaking and following rules, I want to use the omim data to try to piece together if there is a pattern among the "Pure" and "Not" genes. I specifically will look at the omim data for this
+
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Coding Disease Groups per Gene Group
+
+I want to pull the gene names and align them to omim disesases
+```{r}
+# Let's define pure and not pure recessive genes for both the recessive lethal and not recessive lethal genes
+pure_genes = gene_selection %>% filter(analytical_recessive == "Pure",
+                                       recessive == 1) %>% 
+  pull(symbol) %>% unique()
+pure_genes_lethal = gene_selection %>% filter(analytical_recessive == "Pure",
+                                              recessive == 1,
+                                                 rec_lethal == 1) %>% 
+  pull(symbol) %>% unique()
+
+# Then not pure genes
+not_genes = gene_selection %>% filter(analytical_recessive == "Not",
+                                      recessive == 1) %>% 
+  pull(symbol) %>% unique()
+not_genes_lethal = gene_selection %>% filter(analytical_recessive == "Not",
+                                             recessive == 1,
+                                                 rec_lethal == 1) %>% 
+  pull(symbol) %>% unique()
+
+# Now, find the disorders/diseases associated with these pure recessive genes
+omim_pure <- omim %>%
+  filter(map_lgl(str_split(`gene`, ",\\s*"), 
+                 ~ any(.x %in% pure_genes))) %>%
+  mutate(gene = map_chr(str_split(`gene`, ",\\s*"),
+                        ~ str_c(.x[.x %in% pure_genes], collapse = ", "))) %>% 
+  mutate(Phenotype = str_extract(Phenotype, "^.*(?=,\\s*\\d{6})"))
+
+omim_pure_lethal <- omim %>%
+  filter(map_lgl(str_split(`gene`, ",\\s*"), 
+                 ~ any(.x %in% pure_genes_lethal))) %>%
+  mutate(gene = map_chr(str_split(`gene`, ",\\s*"),
+                        ~ str_c(.x[.x %in% pure_genes_lethal], collapse = ", "))) %>% 
+  mutate(Phenotype = str_extract(Phenotype, "^.*(?=,\\s*\\d{6})"))
+
+# And then the disorders/diseases associated not pure recessive genes
+omim_not <- omim %>%
+  filter(map_lgl(str_split(`gene`, ",\\s*"), 
+                 ~ any(.x %in% not_genes))) %>%
+  mutate(gene = map_chr(str_split(`gene`, ",\\s*"),
+                        ~ str_c(.x[.x %in% not_genes], collapse = ", "))) %>% 
+  mutate(Phenotype = str_extract(Phenotype, "^.*(?=,\\s*\\d{6})"))
+
+omim_not_lethal <- omim %>%
+  filter(map_lgl(str_split(`gene`, ",\\s*"), 
+                 ~ any(.x %in% not_genes_lethal))) %>%
+  mutate(gene = map_chr(str_split(`gene`, ",\\s*"),
+                        ~ str_c(.x[.x %in% not_genes_lethal], collapse = ", "))) %>% 
+  mutate(Phenotype = str_extract(Phenotype, "^.*(?=,\\s*\\d{6})"))
+
+
+```
+
+
+# GO and KEGG enrichment
+
+Now that I have a list of "Pure" and "Not Pure" recessive genes, I want to analyze the function and pathways related to these genes. To do that I will perform GO and KEGG enrichment on my "Pure" and "Not Pure" recessive genes segregated by "Recessive Lethal" status
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Lists of Genes (Entrez IDs)
+
+The very first thing I want to do is define the separate gene lists I want. I want 4 lists of genes: 
+- Pure Recessive Genes
+- Pure Recessive Lethal Genes
+- Not Pure Recessive Genes
+- Not Pure Recessive Lethal Genes
+And for these genes, I actually want Entrez IDs so I'll convert my ENSG names with the code
+```{r}
+# Let's define pure and not pure recessive genes for both the recessive lethal and not recessive lethal genes
+pure_entrez = gene_selection %>% 
+  filter(analytical_recessive == "Pure", recessive == 1) %>% 
+  pull(ensg) %>% 
+  AnnotationDbi::select(org.Hs.eg.db, 
+                        keys = ., 
+                        columns = "ENTREZID", 
+                        keytype = "ENSEMBL") %>% 
+  pull(ENTREZID) %>% 
+  unique()
+  
+pure_entrez_lethal = gene_selection %>% 
+  filter(analytical_recessive == "Pure", recessive == 1, rec_lethal == 1) %>% 
+  pull(ensg) %>% 
+  AnnotationDbi::select(org.Hs.eg.db, 
+                        keys = ., 
+                        columns = "ENTREZID", 
+                        keytype = "ENSEMBL") %>% 
+  pull(ENTREZID) %>% 
+  unique()
+
+# Then not pure genes
+not_entrez = gene_selection %>% 
+  filter(analytical_recessive == "Not", recessive == 1) %>% 
+  pull(ensg) %>% 
+  AnnotationDbi::select(org.Hs.eg.db, 
+                        keys = ., 
+                        columns = "ENTREZID", 
+                        keytype = "ENSEMBL") %>% 
+  pull(ENTREZID) %>% 
+  unique()
+
+not_entrez_lethal = gene_selection %>% 
+  filter(analytical_recessive == "Not", recessive == 1, rec_lethal == 1) %>% 
+  pull(ensg) %>% 
+  AnnotationDbi::select(org.Hs.eg.db, 
+                        keys = ., 
+                        columns = "ENTREZID", 
+                        keytype = "ENSEMBL") %>% 
+  pull(ENTREZID) %>% 
+  unique()
+```
+
+##  GO Enrichment
+
+I first want to perform GO enrichment and not separate yet on Molecular Function, Cellular Component, or Biological Process. I can use the genes from the previous chunk
+
+```{r}
+# Pure genes enrichments
+pure_go <- enrichGO(gene = pure_entrez,
+                       OrgDb = org.Hs.eg.db,  # Use appropriate annotation for your species
+                       keyType = 'ENTREZID',    # Type of gene ID (ENTREZID, SYMBOL, etc.)
+                       ont = "ALL",          # Ontology
+                       pAdjustMethod = "BH",          # Adjust for multiple testing
+                       pvalueCutoff  = 0.05,          # P-value cutoff
+                       qvalueCutoff  = 0.2,
+                       readable = T)
+pure_go = as.data.frame(pure_go)
+
+# Pure Lethal genes enrichments
+pure_lethal_go <- enrichGO(gene = pure_entrez_lethal,
+                       OrgDb = org.Hs.eg.db,  # Use appropriate annotation for your species
+                       keyType = 'ENTREZID',    # Type of gene ID (ENTREZID, SYMBOL, etc.)
+                       ont = "ALL",          # Ontology
+                       pAdjustMethod = "BH",          # Adjust for multiple testing
+                       pvalueCutoff  = 0.05,          # P-value cutoff
+                       qvalueCutoff  = 0.2,
+                       readable = T)
+pure_lethal_go = as.data.frame(pure_lethal_go)
+
+# Not Pure genes enrichments
+not_go <- enrichGO(gene = not_entrez,
+                       OrgDb = org.Hs.eg.db,  # Use appropriate annotation for your species
+                       keyType = 'ENTREZID',    # Type of gene ID (ENTREZID, SYMBOL, etc.)
+                       ont = "ALL",          # Ontology
+                       pAdjustMethod = "BH",          # Adjust for multiple testing
+                       pvalueCutoff  = 0.05,          # P-value cutoff
+                       qvalueCutoff  = 0.2,
+                       readable = T)
+not_go = as.data.frame(not_go)
+
+# Not Pure Lethal genes enrichments
+not_lethal_go <- enrichGO(gene = not_entrez_lethal,
+                       OrgDb = org.Hs.eg.db,  # Use appropriate annotation for your species
+                       keyType = 'ENTREZID',    # Type of gene ID (ENTREZID, SYMBOL, etc.)
+                       ont = "ALL",          # Ontology
+                       pAdjustMethod = "BH",          # Adjust for multiple testing
+                       pvalueCutoff  = 0.05,          # P-value cutoff
+                       qvalueCutoff  = 0.2,
+                       readable = T)
+not_lethal_go = as.data.frame(not_lethal_go)
+```
+
+## KEGG Enrichment
+
+Using the same gene lists, I want to perform KEGG enrichment, which will highlight pathways of interest
+```{r}
+# Pure Genes
+pure_kegg <- enrichKEGG(gene         = pure_entrez,
+                        organism     = 'hsa',         # 'hsa' for human, use the correct KEGG organism code
+                        keyType      = 'kegg',        # Use 'kegg' as keyType
+                        pAdjustMethod = "BH",         # Adjust for multiple testing
+                        pvalueCutoff  = 0.05)
+pure_kegg = as.data.frame(pure_kegg)
+
+# Pure Lethal Genes
+pure_lethal_kegg <- enrichKEGG(gene         = pure_entrez_lethal,
+                        organism     = 'hsa',         # 'hsa' for human, use the correct KEGG organism code
+                        keyType      = 'kegg',        # Use 'kegg' as keyType
+                        pAdjustMethod = "BH",         # Adjust for multiple testing
+                        pvalueCutoff  = 0.05)
+pure_lethal_kegg = as.data.frame(pure_lethal_kegg)
+
+
+# Not Pure Genes
+not_kegg <- enrichKEGG(gene         = not_entrez,
+                        organism     = 'hsa',         # 'hsa' for human, use the correct KEGG organism code
+                        keyType      = 'kegg',        # Use 'kegg' as keyType
+                        pAdjustMethod = "BH",         # Adjust for multiple testing
+                        pvalueCutoff  = 0.05)
+not_kegg = as.data.frame(not_kegg)
+
+# Not Pure Lethal Genes
+not_lethal_kegg <- enrichKEGG(gene         = not_entrez_lethal,
+                        organism     = 'hsa',         # 'hsa' for human, use the correct KEGG organism code
+                        keyType      = 'kegg',        # Use 'kegg' as keyType
+                        pAdjustMethod = "BH",         # Adjust for multiple testing
+                        pvalueCutoff  = 0.05)
+not_lethal_kegg = as.data.frame(not_lethal_kegg)
+
+```
+
+## Control test
+
+Something I'm immediately worried about is that these enrichments (especially the lysosome results seen in the "Not Pure" category) are biased by the fact that most Recessive genes fall within those categories. I want to run 1 set of GO and KEGG enrichment on all recessive genes just so I have a baseline understanding of enrichment
+
+```{r}
+# First get the entrez id of all genes
+recessive_entrez = gene_selection %>% 
+  filter(recessive == 1) %>% 
+  pull(ensg) %>% 
+  AnnotationDbi::select(org.Hs.eg.db, 
+                        keys = ., 
+                        columns = "ENTREZID", 
+                        keytype = "ENSEMBL") %>% 
+  pull(ENTREZID) %>% 
+  unique()
+
+# Then perform go enrichment on these genes
+recessive_go <- enrichGO(gene = recessive_entrez,
+                       OrgDb = org.Hs.eg.db,  # Use appropriate annotation for your species
+                       keyType = 'ENTREZID',    # Type of gene ID (ENTREZID, SYMBOL, etc.)
+                       ont = "ALL",          # Ontology
+                       pAdjustMethod = "BH",          # Adjust for multiple testing
+                       pvalueCutoff  = 0.05,          # P-value cutoff
+                       qvalueCutoff  = 0.2,
+                       readable = T)
+recessive_go = as.data.frame(recessive_go)
+
+# And then KEGG
+recessive_kegg <- enrichKEGG(gene         = recessive_entrez,
+                        organism     = 'hsa',         # 'hsa' for human, use the correct KEGG organism code
+                        keyType      = 'kegg',        # Use 'kegg' as keyType
+                        pAdjustMethod = "BH",         # Adjust for multiple testing
+                        pvalueCutoff  = 0.05)
+recessive_kegg = as.data.frame(recessive_kegg)
+```
+
+
+## Save results
+
+I also want to save these dataframes of GO and KEGG results to be viewed later
+```{r}
+# I will save my results as TSVs
+# All recessive GO and KEGG enrichment
+write_tsv(recessive_go,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/recessive_genes_go_enrichment_10.22.24.tsv")
+
+write_tsv(recessive_kegg,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/recessive_genes_kegg_enrichment_10.22.24.tsv")
+
+# Pure Go and KEGG enrichment
+write_tsv(pure_go,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_genes_go_enrichment_10.22.24.tsv")
+
+write_tsv(pure_kegg,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_genes_kegg_enrichment_10.22.24.tsv")
+
+# Pure Lethal Go and KEGG enrichment
+write_tsv(pure_lethal_go,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_lethal_genes_go_enrichment_10.22.24.tsv")
+
+write_tsv(pure_lethal_kegg,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_lethal_genes_kegg_enrichment_10.22.24.tsv")
+
+
+# Not Pure Go and KEGG enrichment
+write_tsv(not_go,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_genes_go_enrichment_10.22.24.tsv")
+
+write_tsv(not_kegg,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_genes_kegg_enrichment_10.22.24.tsv")
+
+# Not Pure Lethal Go and KEGG enrichment
+write_tsv(not_lethal_go,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_lethal_genes_go_enrichment_10.22.24.tsv")
+
+write_tsv(not_lethal_kegg,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_lethal_genes_kegg_enrichment_10.22.24.tsv")
+
+```
+
+
+
+# HPO Enrichment
+
+Along with GO and KEGG enrichment, which tell me about gene function on cellular, molecular, and pathway things, I want to perform enrichment on phenotypes associated with these genes
+
+I will use this using the Human Phenotype Ontology
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## List of Genes
+
+I want lists of genes to perform this analysis. I want 5 different lists:
+- All Recessive Genes
+- Pure Recessive Genes
+- Pure Recessive Lethal Genes
+- Not Pure Recessive Genes
+- Not Pure Recessive Lethal Genes
+
+The "All Recessive Genes" is basically my control over the whole space of genes I'm looking at. And then I split on "Pure' and "Not Pure". And then I split again based on if they are "recessive lethal" or not
+
+```{r}
+# First all the recessive gene names
+recessive_names = gene_selection %>% 
+  filter(recessive == 1) %>% 
+  pull(symbol) 
+
+# Then Pure Genes
+pure_names = gene_selection %>% 
+  filter(recessive == 1, analytical_recessive == "Pure") %>% 
+  pull(symbol) 
+
+# Then Pure Lethal Genes
+pure_lethal_names = gene_selection %>% 
+  filter(recessive == 1, analytical_recessive == "Pure", rec_lethal == 1) %>% 
+  pull(symbol) 
+
+# Then Not Pure Genes
+not_names = gene_selection %>% 
+  filter(recessive == 1, analytical_recessive == "Not") %>% 
+  pull(symbol) 
+
+# Then Not Pure Lethal Genes
+not_lethal_names = gene_selection %>% 
+  filter(recessive == 1, analytical_recessive == "Not", rec_lethal == 1) %>% 
+  pull(symbol) 
+
+```
+
+
+## HGO Enrichment
+
+Now with my lists of gene names, I can perform enrichment on the human phenotype ontology
+
+```{r}
+# Save the db that we want to use in a vector
+phedb <- c("HPO", "MGD", "CRB", "CTD") # I can use getdbnames() to find more ontologies to use
+
+# Enrichment on all recessive diseases
+recessive_pheno = (PhenoEnrichGenes(genes = recessive_names, database = phedb))$alldata
+
+# And then run the Pure Gene enrichment
+pure_pheno <- (PhenoEnrichGenes(genes= pure_names, database = phedb))$alldata 
+
+# And then run the Pure Lethal Gene enrichment
+pure_lethal_pheno <- (PhenoEnrichGenes(genes= pure_lethal_names, database = phedb))$alldata 
+
+# And then run the Not Pure Gene enrichment
+not_pheno <- (PhenoEnrichGenes(genes= not_names, database = phedb))$alldata 
+
+# And then run the Not Pure Lethal Gene enrichment
+not_lethal_pheno <- (PhenoEnrichGenes(genes= not_lethal_names, database = phedb))$alldata 
+```
+
+## Save results
+
+I also want to save these dataframes of phenotype enrichment to save and look at
+```{r}
+# I will save my results as TSVs
+# All recessive phenotype enrichment
+write_tsv(recessive_pheno,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/recessive_genes_pheno_enrichment_10.22.24.tsv")
+
+# Pure phenotype enrichment
+write_tsv(pure_pheno,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_genes_pheno_enrichment_10.22.24.tsv")
+
+# Pure Lethal phenotype enrichment 
+write_tsv(pure_lethal_pheno,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/pure_lethal_genes_pheno_enrichment_10.22.24.tsv")
+
+# Not Pure phenotype enrichment
+write_tsv(not_pheno,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_genes_pheno_enrichment_10.22.24.tsv")
+
+# Not Pure Lethal phenotype enrichment
+write_tsv(not_lethal_pheno,
+          "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/not_lethal_genes_pheno_enrichment_10.22.24.tsv")
+
+```
