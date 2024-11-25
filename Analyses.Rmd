@@ -28,6 +28,9 @@ library(forcats)
 library(data.table)
 library(ggrepel)
 library(PhenoExam)
+library(ggpubr)
+library(ggExtra)
+library(ggpointdensity)
 
 #BioConductor Packages
 library(BiocManager)
@@ -67,7 +70,7 @@ I want to slighly modify these files for the following plots I'll just do that a
 
 I want to slightly modify the gene_selection dataframe to include a variable of genes that do and don't break the theoretical S=1 barrier. I can do this by dividing pLoF over squareroot mutational target
 
-I will also include a new variable to define "pure" vs "not" vs "mixed" recessive status based on these analytical methods and plots that I will have
+I will also include a new variable to define "pure" vs "not" vs "mixed" macarthur_rec status based on these analytical methods and plots that I will have
 
 ```{r}
 gene_selection = gene_selection_raw %>% 
@@ -112,7 +115,7 @@ omim = omim %>% filter(gene %in% gene_selection$symbol)
 
 # And then I want to add on pLoF/sqrt(mu*L) estimate of selection to more easily figure out which genes break the curve and their phenotype
 omim = gene_selection %>% 
-  dplyr::select(symbol, pLoF_muL, pLoF_shet, recessive, rec_lethal, analytical_recessive) %>% unique() %>% 
+  dplyr::select(symbol, pLoF_muL, pLoF_shet, macarthur_rec, omim_rec, rec_lethal, analytical_recessive) %>% unique() %>% 
   left_join(omim, ., by = c("gene" = "symbol"))
   
 ```
@@ -134,7 +137,7 @@ rm(list = setdiff(ls(), vars_keeping)
 
 # Plotting mutational target vs pLoF
 
-If I assume that the recessive genes only affect homozygotes then they are bounded by 1 when we model squareroot mutational target vs pLoF. If points fall below y=x then there is a non-recessive effect, likely in a quantitative trait
+If I assume that the recessive genes only affect homozygotes then they are bounded by 1 when we model squareroot mutational target vs pLoF. If points fall below y=x then there is a non-macarthur_rec effect, likely in a quantitative trait
 
 ## Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
@@ -148,58 +151,51 @@ rm(list = setdiff(ls(), vars_keeping)
 ```
 
 
-## Plotting datasets
-
-Make the necessary plotting datasets or at least pull the necessary and unique rows
-```{r}
-plotting_df = gene_selection %>% 
-  select(sqrt_mt, pLoF, pLoF_muL, recessive, rec_lethal, symbol) %>% 
-  unique()
-```
-
-
-
 ## Actually plotting data
 
 I have this data in my merged dataset, let me plot it
 ```{r}
-# Let's just plot this with all genes separating the color if it's recessive or not
+# Let's just plot this with all genes without separating on recessive status
 all = gene_selection %>% 
 ggplot(.) +
-  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(recessive))) + 
+  geom_point(aes(x = sqrt_mt, y = pLoF), color = "red", show.legend = F) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Expected vs Observed LoF mutations",
+  labs(title = "All Genes - Expected vs Observed LoF mutations",
        x = "Squareroot Mutational Target",
-       y = "pLof",
-       color = "Recessive Gene?") +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
+       y = "pLof",) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+all = ggMarginal(all, type = "histogram", margins = "both", size = 6, fill = "red", bins = 100)
 
-# Let's show just recessive
-recessive = gene_selection %>% filter(recessive == 1) %>% 
+
+
+# Let's show just macarthur_rec
+macarthur = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
-  geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(recessive))) + 
+  geom_point(aes(x = sqrt_mt, y = pLoF), color = "blue", show.legend = F) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Expected vs Observed LoF mutations",
+  labs(title = "Recessive Genes - Expected vs Observed LoF mutations",
        x = "Squareroot Mutational Target",
-       y = "pLof",
-       color = "Recessive Gene?") +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
+       y = "pLof",) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+macarthur = ggMarginal(macarthur, type = "histogram", margins = "both", size = 6, fill = "blue", bins = 100)
 
 ```
 
-I also have a variable that indicates if the gene is recessive lethal. I want to make more of these plots where I now show these recessive lethal genes and compare that to recessive genes that are not lethal
+I then want to include a plot that includes both the universe of genes while differentiating on recessive status. Once again, I'm going to be using macarthur-verified fro my list
+
+
+
+I also have a variable that indicates if the gene is macarthur_rec lethal. I want to make more of these plots where I now show these macarthur_rec lethal genes and compare that to macarthur_rec genes that are not lethal
 
 ```{r}
-# Plotting recessive genes and differentiating based on recessive lethal
-recessive_only = gene_selection %>% filter(recessive == 1) %>% 
+# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal
+recessive_only = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
@@ -213,7 +209,7 @@ ggplot(.) +
   ) +
   theme_minimal()
 
-# now plotting only the recessive lethal genes
+# now plotting only the macarthur_rec lethal genes
 recessive_lethal = gene_selection %>% filter(rec_lethal == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
@@ -231,15 +227,15 @@ ggplot(.) +
 
 ## Plot with labels
 
-I also want to create a set of plots with labels of the genes. I'm only going to do this for the last 2 plots I made of just recessive genes
+I also want to create a set of plots with labels of the genes. I'm only going to do this for the last 2 plots I made of just macarthur_rec genes
 
 ```{r}
 # I need to create a slightly specific plotting_df for these labeled plots
 plotting_df = gene_selection %>% 
-  filter(recessive == 1) %>% 
+  filter(macarthur_rec == 1) %>% 
   na.omit()
 
-# Now plotting recessive genes
+# Now plotting macarthur_rec genes
 recessive_only_labeled = plotting_df %>%  
   ggplot(.) +
   geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
@@ -260,7 +256,7 @@ recessive_only_labeled = plotting_df %>%
   ) +
   theme_minimal()
 
-# now plotting only the recessive lethal genes
+# now plotting only the macarthur_rec lethal genes
 recessive_lethal_labeled = plotting_df %>% filter(rec_lethal == 1) %>% 
   ggplot(.) +
   geom_point(aes(x = sqrt_mt, y = pLoF, colour = factor(rec_lethal))) + 
@@ -316,9 +312,9 @@ balancing_labeled = plotting_balanced %>%
 
 # Plotting Shet vs bias-corrected effect sizes
 
-Alright, now I want to plot out the association between Shet and effect sizes. Theoretically, all the recessive genes will have Shet = 0, but they will probably have Shet > 0 due to how GeneBayes work and because we assume there are het effects.
+Alright, now I want to plot out the association between Shet and effect sizes. Theoretically, all the macarthur_rec genes will have Shet = 0, but they will probably have Shet > 0 due to how GeneBayes work and because we assume there are het effects.
 
-However, we expect this curve and the burden test effect sizes to be lower for the recessive genes compared to the universe of all genes
+However, we expect this curve and the burden test effect sizes to be lower for the macarthur_rec genes compared to the universe of all genes
 
 ## Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
@@ -339,31 +335,31 @@ To make the plot, I need to bin the genes into bins to reduce noise. I plan to m
 ```{r}
 # Let' start by taking the important columns from the gene_selection df
 plotting_df = burden_tests %>% 
-  select(ensg, s_het, bc_effect_sqr, recessive, rec_lethal) %>% 
+  select(ensg, s_het, bc_effect_sqr, macarthur_rec, rec_lethal) %>% 
   unique() %>% na.omit() %>% 
-  # These results are super noisy so I need to create bins of my genes. I want to bin on recessive status before anything 
+  # These results are super noisy so I need to create bins of my genes. I want to bin on macarthur_rec status before anything 
   arrange(s_het) %>%
-  group_by(recessive) %>% 
+  group_by(macarthur_rec) %>% 
   mutate(bin = cut_number(s_het, n = 100, labels = FALSE)) %>% 
   # Now group on bin along with the gene statuses to calculate shet and effect
-  group_by(bin, recessive, rec_lethal) %>% 
+  group_by(bin, macarthur_rec, rec_lethal) %>% 
   mutate(bin_shet = mean(s_het),
          bin_effect = mean(bc_effect_sqr)) %>% 
   ungroup() %>% 
   # And now pull realy the only columns I need for plotting
-  select(bin, bin_shet, bin_effect, recessive, rec_lethal) %>%
+  select(bin, bin_shet, bin_effect, macarthur_rec, rec_lethal) %>%
   unique()
 ```
 
 
 ## Actually plotting
 
-With this information, I can now plot this. I will do similar to the previous set of plots where I will look at all genes, then recessive genes, and then recessive lethal genes
+With this information, I can now plot this. I will do similar to the previous set of plots where I will look at all genes, then macarthur_rec genes, and then macarthur_rec lethal genes
 
 ```{r}
 # First all genes
 all_genes = plotting_df %>% 
-ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(macarthur_rec))) +
   geom_point() + 
   geom_smooth( method = "loess", se = FALSE) +
   labs(title = "Gene Selection vs Observed Effect Size",
@@ -377,9 +373,9 @@ ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
   ) +
   theme_minimal()
 
-# And then only look at recessive genes
-all_recessive = plotting_df %>% filter(recessive == 1) %>% 
-ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
+# And then only look at macarthur_rec genes
+all_recessive = plotting_df %>% filter(macarthur_rec == 1) %>% 
+ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(macarthur_rec))) +
   geom_point() + 
   geom_smooth( method = "loess", se = FALSE) +
   labs(title = "Gene Selection vs Observed Effect Size",
@@ -393,8 +389,8 @@ ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(recessive))) +
   ) +
   theme_minimal()
 
-# And now look at separation between recessive and recessive lethal
-recessive_plus_lethal = plotting_df %>% filter(recessive == 1) %>% 
+# And now look at separation between macarthur_rec and macarthur_rec lethal
+recessive_plus_lethal = plotting_df %>% filter(macarthur_rec == 1) %>% 
 ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
   geom_point() + 
   geom_smooth( method = "loess", se = FALSE) +
@@ -409,7 +405,7 @@ ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
   ) +
   theme_minimal()
 
-# And then just recessive lethal genes
+# And then just macarthur_rec lethal genes
 only_lethal = plotting_df %>% filter(rec_lethal == 1) %>% 
 ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
   geom_point() + 
@@ -451,10 +447,10 @@ rm(list = setdiff(ls(), vars_keeping)
 Now the actual plots using this plotting data
 
 ```{r}
-# Let's just plot this with all genes separating the color if it's recessive or not
+# Let's just plot this with all genes separating the color if it's macarthur_rec or not
 all = gene_selection %>% 
 ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(recessive))) + 
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(macarthur_rec))) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
   labs(title = "Observed LoF Mutations vs Heterozygous Selection",
        x = "S_het",
@@ -467,10 +463,10 @@ ggplot(.) +
   ) +
   theme_minimal()
 
-# Let's show just recessive
-recessive = gene_selection %>% filter(recessive == 1) %>% 
+# Let's show just macarthur_rec
+macarthur_rec = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(recessive))) + 
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(macarthur_rec))) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
   labs(title = "Observed LoF Mutations vs Heterozygous Selection",
        x = "S_het",
@@ -483,8 +479,8 @@ ggplot(.) +
   ) +
   theme_minimal()
 
-# Plotting recessive genes and differentiating based on recessive lethal
-recessive_only = gene_selection %>% filter(recessive == 1) %>% 
+# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal
+recessive_only = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
@@ -499,7 +495,7 @@ ggplot(.) +
   ) +
   theme_minimal()
 
- # now plotting only the recessive lethal genes
+ # now plotting only the macarthur_rec lethal genes
 recessive_lethal = gene_selection %>% filter(rec_lethal == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
@@ -520,18 +516,18 @@ ggplot(.) +
 
 ## Plotting genes with labels
 
-I also want to make another version of these plots where I label the recessive genes where a majority of the selection is on homozygotes. This means genes that fall above the line
+I also want to make another version of these plots where I label the macarthur_rec genes where a majority of the selection is on homozygotes. This means genes that fall above the line
 
-I want to do this only for the all recessive genes plot and the recessive letahl genes plot
+I want to do this only for the all macarthur_rec genes plot and the macarthur_rec letahl genes plot
 
 ```{r}
-# Plotting recessive genes and differentiating based on recessive lethal WITH LABELS
-recessive_labeled = gene_selection %>% filter(recessive == 1) %>% 
+# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal WITH LABELS
+recessive_labeled = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") + 
   geom_text_repel(
-      data = filter(gene_selection, recessive == 1, pLoF_shet > 1),
+      data = filter(gene_selection, macarthur_rec == 1, pLoF_shet > 1),
       aes(x = s_het, y = pLoF, label = symbol),
       size = 3,
       max.overlaps = 20 # Set the maximum number of overlaps allowed
@@ -547,7 +543,7 @@ ggplot(.) +
   ) +
   theme_minimal()
 
-# now plotting only the recessive lethal genes With LABELS
+# now plotting only the macarthur_rec lethal genes With LABELS
 lethal_labeled = gene_selection %>% filter(rec_lethal == 1) %>% 
 ggplot(.) +
   geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
@@ -594,25 +590,25 @@ rm(list = setdiff(ls(), vars_keeping)
 
 I want to pull the gene names and align them to omim disesases
 ```{r}
-# Let's define pure and not pure recessive genes for both the recessive lethal and not recessive lethal genes
+# Let's define pure and not pure macarthur_rec genes for both the macarthur_rec lethal and not macarthur_rec lethal genes
 pure_genes = gene_selection %>% filter(analytical_recessive == "Pure",
-                                       recessive == 1) %>% 
+                                       macarthur_rec == 1) %>% 
   pull(symbol) %>% unique()
 pure_genes_lethal = gene_selection %>% filter(analytical_recessive == "Pure",
-                                              recessive == 1,
+                                              macarthur_rec == 1,
                                                  rec_lethal == 1) %>% 
   pull(symbol) %>% unique()
 
 # Then not pure genes
 not_genes = gene_selection %>% filter(analytical_recessive == "Not",
-                                      recessive == 1) %>% 
+                                      macarthur_rec == 1) %>% 
   pull(symbol) %>% unique()
 not_genes_lethal = gene_selection %>% filter(analytical_recessive == "Not",
-                                             recessive == 1,
+                                             macarthur_rec == 1,
                                                  rec_lethal == 1) %>% 
   pull(symbol) %>% unique()
 
-# Now, find the disorders/diseases associated with these pure recessive genes
+# Now, find the disorders/diseases associated with these pure macarthur_rec genes
 omim_pure <- omim %>%
   filter(map_lgl(str_split(`gene`, ",\\s*"), 
                  ~ any(.x %in% pure_genes))) %>%
@@ -627,7 +623,7 @@ omim_pure_lethal <- omim %>%
                         ~ str_c(.x[.x %in% pure_genes_lethal], collapse = ", "))) %>% 
   mutate(Phenotype = str_extract(Phenotype, "^.*(?=,\\s*\\d{6})"))
 
-# And then the disorders/diseases associated not pure recessive genes
+# And then the disorders/diseases associated not pure macarthur_rec genes
 omim_not <- omim %>%
   filter(map_lgl(str_split(`gene`, ",\\s*"), 
                  ~ any(.x %in% not_genes))) %>%
@@ -648,7 +644,7 @@ omim_not_lethal <- omim %>%
 
 # GO and KEGG enrichment
 
-Now that I have a list of "Pure" and "Not Pure" recessive genes, I want to analyze the function and pathways related to these genes. To do that I will perform GO and KEGG enrichment on my "Pure" and "Not Pure" recessive genes segregated by "Recessive Lethal" status
+Now that I have a list of "Pure" and "Not Pure" macarthur_rec genes, I want to analyze the function and pathways related to these genes. To do that I will perform GO and KEGG enrichment on my "Pure" and "Not Pure" macarthur_rec genes segregated by "Recessive Lethal" status
 
 ## Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
@@ -671,9 +667,9 @@ The very first thing I want to do is define the separate gene lists I want. I wa
 - Not Pure Recessive Lethal Genes
 And for these genes, I actually want Entrez IDs so I'll convert my ENSG names with the code
 ```{r}
-# Let's define pure and not pure recessive genes for both the recessive lethal and not recessive lethal genes
+# Let's define pure and not pure macarthur_rec genes for both the macarthur_rec lethal and not macarthur_rec lethal genes
 pure_entrez = gene_selection %>% 
-  filter(analytical_recessive == "Pure", recessive == 1) %>% 
+  filter(analytical_recessive == "Pure", macarthur_rec == 1) %>% 
   pull(ensg) %>% 
   AnnotationDbi::select(org.Hs.eg.db, 
                         keys = ., 
@@ -683,7 +679,7 @@ pure_entrez = gene_selection %>%
   unique()
   
 pure_entrez_lethal = gene_selection %>% 
-  filter(analytical_recessive == "Pure", recessive == 1, rec_lethal == 1) %>% 
+  filter(analytical_recessive == "Pure", macarthur_rec == 1, rec_lethal == 1) %>% 
   pull(ensg) %>% 
   AnnotationDbi::select(org.Hs.eg.db, 
                         keys = ., 
@@ -694,7 +690,7 @@ pure_entrez_lethal = gene_selection %>%
 
 # Then not pure genes
 not_entrez = gene_selection %>% 
-  filter(analytical_recessive == "Not", recessive == 1) %>% 
+  filter(analytical_recessive == "Not", macarthur_rec == 1) %>% 
   pull(ensg) %>% 
   AnnotationDbi::select(org.Hs.eg.db, 
                         keys = ., 
@@ -704,7 +700,7 @@ not_entrez = gene_selection %>%
   unique()
 
 not_entrez_lethal = gene_selection %>% 
-  filter(analytical_recessive == "Not", recessive == 1, rec_lethal == 1) %>% 
+  filter(analytical_recessive == "Not", macarthur_rec == 1, rec_lethal == 1) %>% 
   pull(ensg) %>% 
   AnnotationDbi::select(org.Hs.eg.db, 
                         keys = ., 
@@ -805,12 +801,12 @@ not_lethal_kegg = as.data.frame(not_lethal_kegg)
 
 ## Control test
 
-Something I'm immediately worried about is that these enrichments (especially the lysosome results seen in the "Not Pure" category) are biased by the fact that most Recessive genes fall within those categories. I want to run 1 set of GO and KEGG enrichment on all recessive genes just so I have a baseline understanding of enrichment
+Something I'm immediately worried about is that these enrichments (especially the lysosome results seen in the "Not Pure" category) are biased by the fact that most Recessive genes fall within those categories. I want to run 1 set of GO and KEGG enrichment on all macarthur_rec genes just so I have a baseline understanding of enrichment
 
 ```{r}
 # First get the entrez id of all genes
 recessive_entrez = gene_selection %>% 
-  filter(recessive == 1) %>% 
+  filter(macarthur_rec == 1) %>% 
   pull(ensg) %>% 
   AnnotationDbi::select(org.Hs.eg.db, 
                         keys = ., 
@@ -845,7 +841,7 @@ recessive_kegg = as.data.frame(recessive_kegg)
 I also want to save these dataframes of GO and KEGG results to be viewed later
 ```{r}
 # I will save my results as TSVs
-# All recessive GO and KEGG enrichment
+# All macarthur_rec GO and KEGG enrichment
 write_tsv(recessive_go,
           "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/recessive_genes_go_enrichment_10.22.24.tsv")
 
@@ -912,32 +908,32 @@ I want lists of genes to perform this analysis. I want 5 different lists:
 - Not Pure Recessive Genes
 - Not Pure Recessive Lethal Genes
 
-The "All Recessive Genes" is basically my control over the whole space of genes I'm looking at. And then I split on "Pure' and "Not Pure". And then I split again based on if they are "recessive lethal" or not
+The "All Recessive Genes" is basically my control over the whole space of genes I'm looking at. And then I split on "Pure' and "Not Pure". And then I split again based on if they are "macarthur_rec lethal" or not
 
 ```{r}
-# First all the recessive gene names
+# First all the macarthur_rec gene names
 recessive_names = gene_selection %>% 
-  filter(recessive == 1) %>% 
+  filter(macarthur_rec == 1) %>% 
   pull(symbol) 
 
 # Then Pure Genes
 pure_names = gene_selection %>% 
-  filter(recessive == 1, analytical_recessive == "Pure") %>% 
+  filter(macarthur_rec == 1, analytical_recessive == "Pure") %>% 
   pull(symbol) 
 
 # Then Pure Lethal Genes
 pure_lethal_names = gene_selection %>% 
-  filter(recessive == 1, analytical_recessive == "Pure", rec_lethal == 1) %>% 
+  filter(macarthur_rec == 1, analytical_recessive == "Pure", rec_lethal == 1) %>% 
   pull(symbol) 
 
 # Then Not Pure Genes
 not_names = gene_selection %>% 
-  filter(recessive == 1, analytical_recessive == "Not") %>% 
+  filter(macarthur_rec == 1, analytical_recessive == "Not") %>% 
   pull(symbol) 
 
 # Then Not Pure Lethal Genes
 not_lethal_names = gene_selection %>% 
-  filter(recessive == 1, analytical_recessive == "Not", rec_lethal == 1) %>% 
+  filter(macarthur_rec == 1, analytical_recessive == "Not", rec_lethal == 1) %>% 
   pull(symbol) 
 
 ```
@@ -951,7 +947,7 @@ Now with my lists of gene names, I can perform enrichment on the human phenotype
 # Save the db that we want to use in a vector
 phedb <- c("HPO", "MGD", "CRB", "CTD") # I can use getdbnames() to find more ontologies to use
 
-# Enrichment on all recessive diseases
+# Enrichment on all macarthur_rec diseases
 recessive_pheno = (PhenoEnrichGenes(genes = recessive_names, database = phedb))$alldata
 
 # And then run the Pure Gene enrichment
@@ -972,7 +968,7 @@ not_lethal_pheno <- (PhenoEnrichGenes(genes= not_lethal_names, database = phedb)
 I also want to save these dataframes of phenotype enrichment to save and look at
 ```{r}
 # I will save my results as TSVs
-# All recessive phenotype enrichment
+# All macarthur_rec phenotype enrichment
 write_tsv(recessive_pheno,
           "/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/enrichment_results/recessive_genes_pheno_enrichment_10.22.24.tsv")
 
