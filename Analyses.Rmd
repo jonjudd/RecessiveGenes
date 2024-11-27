@@ -83,6 +83,9 @@ gene_selection = gene_selection_raw %>%
                                            pLoF_muL < 1 & pLoF_shet < 1 ~ "Not",
                                            TRUE ~ "Mixed")
          )
+
+# Little something extra
+gene_selection$macarthur_rec <- as.factor(gene_selection$macarthur_rec)
 ```
 
 I also want to slightly modify the burden tests and then add on these results to the gene selection data. Though i am going to keep this as the burden tests varaible for simplicity
@@ -158,7 +161,8 @@ I have this data in my merged dataset, let me plot it
 # Let's just plot this with all genes without separating on recessive status
 all = gene_selection %>% 
 ggplot(.) +
-  geom_point(aes(x = sqrt_mt, y = pLoF), color = "red", show.legend = F) + 
+  geom_point(aes(x = sqrt_mt, y = pLoF), 
+             color = "red", show.legend = F, alpha = 0.2) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
   labs(title = "All Genes - Expected vs Observed LoF mutations",
        x = "Squareroot Mutational Target",
@@ -170,11 +174,11 @@ ggplot(.) +
 all = ggMarginal(all, type = "histogram", margins = "both", size = 6, fill = "red", bins = 100)
 
 
-
 # Let's show just macarthur_rec
 macarthur = gene_selection %>% filter(macarthur_rec == 1) %>% 
 ggplot(.) +
-  geom_point(aes(x = sqrt_mt, y = pLoF), color = "blue", show.legend = F) + 
+  geom_point(aes(x = sqrt_mt, y = pLoF),
+             color = "blue", show.legend = F, alpha = 0.2) + 
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
   labs(title = "Recessive Genes - Expected vs Observed LoF mutations",
        x = "Squareroot Mutational Target",
@@ -189,6 +193,49 @@ macarthur = ggMarginal(macarthur, type = "histogram", margins = "both", size = 6
 
 I then want to include a plot that includes both the universe of genes while differentiating on recessive status. Once again, I'm going to be using macarthur-verified fro my list
 
+```{r}
+rec_stratified <- gene_selection %>%
+  ggplot() +
+  # Plot red points first (macarthur_rec = 0)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 0),
+    aes(x = sqrt_mt, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  # Plot blue points on top (macarthur_rec = 1)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 1),
+    aes(x = sqrt_mt, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    title = "Stratified by Recessiveness - Expected vs Observed LoF mutations",
+    x = "Squareroot Mutational Target",
+    y = "pLof",
+    color = "Recessive Gene?"
+  ) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14)
+  )
+
+# Ensure marginal plots work by mapping `colour` to a factor
+rec_stratified <- ggMarginal(
+  rec_stratified,
+  type = "histogram",
+  margins = "both",
+  size = 6,
+  groupColour = TRUE,
+  groupFill = TRUE,  # Ensure grouping by color
+  bins = 100
+)
+```
 
 
 I also have a variable that indicates if the gene is macarthur_rec lethal. I want to make more of these plots where I now show these macarthur_rec lethal genes and compare that to macarthur_rec genes that are not lethal
