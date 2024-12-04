@@ -226,15 +226,15 @@ rec_stratified <- gene_selection %>%
   )
 
 # Ensure marginal plots work by mapping `colour` to a factor
-rec_stratified <- ggMarginal(
-  rec_stratified,
-  type = "histogram",
-  margins = "both",
-  size = 6,
-  groupColour = TRUE,
-  groupFill = TRUE,  # Ensure grouping by color
-  bins = 100
-)
+# rec_stratified <- ggMarginal(
+#   rec_stratified,
+#   type = "histogram",
+#   margins = "both",
+#   size = 6,
+#   groupColour = TRUE,
+#   groupFill = TRUE,  # Ensure grouping by color
+#   bins = 100
+# )
 ```
 
 
@@ -357,6 +357,237 @@ balancing_labeled = plotting_balanced %>%
 
 
 
+# Plotting S_het vs pLoF
+
+Now that we see that there is some sort of het effect, I want to figure out how much of the selection effects is due to hets or homozygotes. I can figure that out by plotting S_het vs pLoF. 
+
+I'm going to make the same types of above plots, but changing the axes. Being above the y=x line is mostly homozygotes selections and below is mostly hets selection 
+
+
+## Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+## Actual Plotting
+
+Now the actual plots using this plotting data
+
+```{r}
+# Let's just plot this with all genes without separating on recessive status
+all = gene_selection %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF), 
+             color = "red", show.legend = F, alpha = 0.2) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "All Genes - Homozygous vs Heterozygous Selection",
+       x = "S_het - Heterozygous Selection",
+       y = "pLof",) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+all = ggMarginal(all, type = "histogram", margins = "both", size = 6, fill = "red", bins = 100)
+
+
+# Let's show just macarthur_rec
+macarthur = gene_selection %>% filter(macarthur_rec == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF),
+             color = "blue", show.legend = F, alpha = 0.2) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Recessive Genes - Homozygous vs Heterozygous Selection",
+       x = "S_het - Heterozygous Selection",
+       y = "pLof",) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+macarthur = ggMarginal(macarthur, type = "histogram", margins = "both", size = 6, fill = "blue", bins = 100)
+
+```
+
+
+Now merge the universe and recessive plots on top of each other
+```{r}
+rec_stratified <- gene_selection %>%
+  ggplot() +
+  # Plot red points first (macarthur_rec = 0)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 0),
+    aes(x = s_het, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  # Plot blue points on top (macarthur_rec = 1)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 1),
+    aes(x = s_het, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    title = "Stratified by Recessiveness - Homozygous vs Heterozygous Selection",
+    x = "S_het - Heterozygous Selection",
+    y = "pLof",
+    color = "Recessive Gene?"
+  ) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14)
+  )
+
+```
+
+## Plotting alternative metric of het selection
+
+So we've been curious if the right comparison uses the S_het that is measured by GeneBayes. Alternatively, we think that using uL/pLoF might serve as a better comparison for het selection so I'm going to create the previous plots, but slightly change the x-axis
+
+```{r}
+# Let's just plot this with all genes without separating on recessive status
+all = gene_selection %>% 
+ggplot(.) +
+  geom_point(aes(x = (sqrt_mt^2)/pLoF, y = pLoF), 
+             color = "red", show.legend = F, alpha = 0.2) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "All Genes - Homozygous vs Heterozygous Selection",
+       x = "uL/pLoF - Heterozygous Selection",
+       y = "pLof",) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+all = ggMarginal(all, type = "histogram", margins = "both", size = 6, fill = "red", bins = 100)
+
+
+# Let's show just macarthur_rec
+macarthur = gene_selection %>% filter(macarthur_rec == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = (sqrt_mt^2)/pLoF, y = pLoF),
+             color = "blue", show.legend = F, alpha = 0.2) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Recessive Genes - Homozygous vs Heterozygous Selection",
+       x = "uL/pLoF - Heterozygous Selection",
+       y = "pLof",) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 14),  # Adjust x-axis title size
+        axis.title.y = element_text(size = 14)   # Adjust y-axis title size
+  )
+macarthur = ggMarginal(macarthur, type = "histogram", margins = "both", size = 6, fill = "blue", bins = 100)
+
+```
+
+
+Now merge the universe and recessive plots on top of each other
+```{r}
+rec_stratified <- gene_selection %>%
+  ggplot() +
+  # Plot red points first (macarthur_rec = 0)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 0),
+    aes(x = (sqrt_mt^2)/pLoF, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  # Plot blue points on top (macarthur_rec = 1)
+  geom_point(
+    data = subset(gene_selection, macarthur_rec == 1),
+    aes(x = (sqrt_mt^2)/pLoF, y = pLoF, colour = factor(macarthur_rec)),
+    alpha = 0.5
+  ) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    title = "Stratified by Recessiveness - Homozygous vs Heterozygous Selection",
+    x = "uL/pLoF - Heterozygous Selection",
+    y = "pLof",
+    color = "Recessive Gene?"
+  ) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  xlim(0,0.025) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14)
+  )
+
+```
+
+
+## Plotting genes with labels
+
+I also want to make another version of these plots where I label the macarthur_rec genes where a majority of the selection is on homozygotes. This means genes that fall above the line
+
+I want to do this only for the all macarthur_rec genes plot and the macarthur_rec letahl genes plot
+
+```{r}
+# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal WITH LABELS
+recessive_labeled = gene_selection %>% filter(macarthur_rec == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") + 
+  geom_text_repel(
+      data = filter(gene_selection, macarthur_rec == 1, pLoF_shet > 1),
+      aes(x = s_het, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - All Recessive Genes",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0,0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+# now plotting only the macarthur_rec lethal genes With LABELS
+lethal_labeled = gene_selection %>% filter(rec_lethal == 1) %>% 
+ggplot(.) +
+  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_text_repel(
+      data = filter(gene_selection, rec_lethal == 1, pLoF_shet > 1),
+      aes(x = s_het, y = pLoF, label = symbol),
+      size = 3,
+      max.overlaps = 20 # Set the maximum number of overlaps allowed
+    ) +
+  labs(title = "Observed LoF Mutations vs Heterozygous Selection - Only Recessive Lethal",
+       x = "S_het",
+       y = "pLof",
+       color = "Recessive Lethal Gene?") + 
+  xlim(0, 0.01) +
+  scale_color_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("0" = "No", "1" = "Yes")
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+
 # Plotting Shet vs bias-corrected effect sizes
 
 Alright, now I want to plot out the association between Shet and effect sizes. Theoretically, all the macarthur_rec genes will have Shet = 0, but they will probably have Shet > 0 due to how GeneBayes work and because we assume there are het effects.
@@ -469,150 +700,6 @@ ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
   theme_minimal()
 ```
 
-
-# Plotting S_het vs pLoF
-
-Now that we see that there is some sort of het effect, I want to figure out how much of the selection effects is due to hets or homozygotes. I can figure that out by plotting S_het vs pLoF. 
-
-I'm going to make the same types of above plots, but changing the axes. Being above the y=x line is mostly homozygotes selections and below is mostly hets selection 
-
-
-## Reset the environment
-I plan to use this segment independent of other larger sections so here is removing transient variables
-```{r}
-#Pick out variables to save
-vars_keeping = c("gene_selection", "burden_tests", "omim")
-
-# Remove everything else
-rm(list = setdiff(ls(), vars_keeping)
-   )
-```
-
-
-## Actual Plotting
-
-Now the actual plots using this plotting data
-
-```{r}
-# Let's just plot this with all genes separating the color if it's macarthur_rec or not
-all = gene_selection %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(macarthur_rec))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Gene?") +
-  xlim(0, 0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
-# Let's show just macarthur_rec
-macarthur_rec = gene_selection %>% filter(macarthur_rec == 1) %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(macarthur_rec))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Gene?") +
-  xlim(0, 0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
-# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal
-recessive_only = gene_selection %>% filter(macarthur_rec == 1) %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection - All Recessive Genes",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Lethal Gene?") + 
-  xlim(0,0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
- # now plotting only the macarthur_rec lethal genes
-recessive_lethal = gene_selection %>% filter(rec_lethal == 1) %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection - Only Recessive Lethal",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Lethal Gene?") + 
-  xlim(0, 0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
-```
-
-
-## Plotting genes with labels
-
-I also want to make another version of these plots where I label the macarthur_rec genes where a majority of the selection is on homozygotes. This means genes that fall above the line
-
-I want to do this only for the all macarthur_rec genes plot and the macarthur_rec letahl genes plot
-
-```{r}
-# Plotting macarthur_rec genes and differentiating based on macarthur_rec lethal WITH LABELS
-recessive_labeled = gene_selection %>% filter(macarthur_rec == 1) %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") + 
-  geom_text_repel(
-      data = filter(gene_selection, macarthur_rec == 1, pLoF_shet > 1),
-      aes(x = s_het, y = pLoF, label = symbol),
-      size = 3,
-      max.overlaps = 20 # Set the maximum number of overlaps allowed
-    ) +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection - All Recessive Genes",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Lethal Gene?") + 
-  xlim(0,0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
-# now plotting only the macarthur_rec lethal genes With LABELS
-lethal_labeled = gene_selection %>% filter(rec_lethal == 1) %>% 
-ggplot(.) +
-  geom_point(aes(x = s_het, y = pLoF, colour = factor(rec_lethal))) + 
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  geom_text_repel(
-      data = filter(gene_selection, rec_lethal == 1, pLoF_shet > 1),
-      aes(x = s_het, y = pLoF, label = symbol),
-      size = 3,
-      max.overlaps = 20 # Set the maximum number of overlaps allowed
-    ) +
-  labs(title = "Observed LoF Mutations vs Heterozygous Selection - Only Recessive Lethal",
-       x = "S_het",
-       y = "pLof",
-       color = "Recessive Lethal Gene?") + 
-  xlim(0, 0.01) +
-  scale_color_manual(
-    values = c("0" = "red", "1" = "blue"),
-    labels = c("0" = "No", "1" = "Yes")
-  ) +
-  theme_minimal()
-
-```
 
 
 
