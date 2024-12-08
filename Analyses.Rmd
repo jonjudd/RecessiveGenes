@@ -53,9 +53,13 @@ I only need to load the gene_selection_data that includes selection information 
 # Load the selection and gene information
 gene_selection_raw = read_tsv("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/gene_selection_datasets/gene_selection_data_2024.11.22.tsv")
 
+
 # Load the burden test results.  This is specifically the burden tests that Nikhil have run on UKB traits and using the 2nd mask of LoF variants for the tests
 burden_tests_raw = fread("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/processed_burden_tests/processed_burden_tests_m2.tsv",
                      sep = "\t")
+# I also want to load data that helps me understand the burden test phenotypes
+ukb_fields = fread("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/processed_burden_tests/ukb_field_data.txt")
+
 
 # And then I want to download omim phenotypes
 omim_raw <- read_delim("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/omim_phenotypes_8.16.24.txt", 
@@ -100,6 +104,16 @@ burden_tests = burden_tests_raw %>%
 
 # And then I merge on the burden tests to the rest of gene selection data
 burden_tests = gene_selection %>% left_join(burden_tests)
+
+# Finally, I want to make the burden results more interpretable by actually adding the name of the field to the results that just the number
+ukb_fields = ukb_fields %>% drop_na() %>% 
+  dplyr::select(field_id, title) %>% 
+  mutate(field_id = str_c("p", field_id)) %>% 
+  dplyr::rename(field = title)
+
+
+burden_tests = burden_tests %>% left_join(., ukb_fields,
+                                          by = c("SOURCE_FILE" = "field_id"))
 ```
 
 And then I want to take the omim data and simplify it so that each gene gets it's own phenotype
@@ -138,7 +152,7 @@ rm(list = setdiff(ls(), vars_keeping)
 
 
 
-# Plotting mutational target vs pLoF
+# pLoF vs sqrt(uL)
 
 If I assume that the recessive genes only affect homozygotes then they are bounded by 1 when we model squareroot mutational target vs pLoF. If points fall below y=x then there is a non-macarthur_rec effect, likely in a quantitative trait
 
@@ -357,7 +371,7 @@ balancing_labeled = plotting_balanced %>%
 
 
 
-# Plotting S_het vs pLoF
+# pLoF vs S_het
 
 Now that we see that there is some sort of het effect, I want to figure out how much of the selection effects is due to hets or homozygotes. I can figure that out by plotting S_het vs pLoF. 
 
@@ -588,7 +602,7 @@ ggplot(.) +
 
 
 
-# Plotting Shet vs bias-corrected effect sizes
+# Bias-corrected effect sizes vs Binned S_het
 
 Alright, now I want to plot out the association between Shet and effect sizes. Theoretically, all the macarthur_rec genes will have Shet = 0, but they will probably have Shet > 0 due to how GeneBayes work and because we assume there are het effects.
 
@@ -703,12 +717,14 @@ ggplot(aes(x = bin_shet, y = bin_effect, colour = factor(rec_lethal))) +
 
 
 
-# Analysing Diseases
 
-Now that I have a list of genes that are breaking and following rules, I want to use the omim data to try to piece together if there is a pattern among the "Pure" and "Not" genes. I specifically will look at the omim data for this
+# Recessive Gene QQ Plots
 
+I want to produce QQ plots for my pure and not pure recessive genes for the burden test results to interpret if there are quantitative traits associated with these genes that explain their behavior especially the not-pure genes
 
-## Reset the environment
+I will make QQ plots for all the pure genes since there's a few, double the number for the non-pure genes and do it randomly, and then choose specific notable genes that I/others recognize
+
+### Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
 ```{r}
 #Pick out variables to save
@@ -720,7 +736,140 @@ rm(list = setdiff(ls(), vars_keeping)
 ```
 
 
-## Coding Disease Groups per Gene Group
+## Pure Recessive Genes QQ plot
+
+Make the qq plots for my pure recessive genes
+```{r}
+# First pull pure genes 
+pure_genes = gene_selection %>% filter(macarthur_rec == 1,
+                                       analytical_recessive == "Pure") %>% 
+  pull(symbol) %>% unique()
+
+# Pull the burden results 
+pure_burden = burden_tests %>% filter(symbol %in% pure_genes) %>% 
+  dplyr::select(symbol, BETA, SE, LOG10P, SOURCE_FILE, field)
+
+# Open a pdf to save the plots
+pdf("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/burden_tests_qqplots/Pure Genes Burden Test QQ Plots.pdf",
+    width = 8, height = 6)
+
+# Loop through pure genes to make QQ plots
+for (gene in pure_genes) {
+  
+  # Message the gene so I know where we are
+  message(gene)
+  
+  # Filter data for the current group
+  filtered_data <- pure_burden %>% filter(symbol == gene)
+  
+  # Add expected -log10(p-values) under null hypothesis
+  n <- nrow(filtered_data)
+  filtered_data <- filtered_data %>%
+    arrange(desc(LOG10P)) %>%
+    mutate(
+      expected = -log10(ppoints(n)),  # Expected -log10(p-values)
+      lower_ci = -log10(qbeta(0.025, seq_len(n), rev(seq_len(n)))),  # Lower bound of CI
+      upper_ci = -log10(qbeta(0.975, seq_len(n), rev(seq_len(n))))   # Upper bound of CI
+    )
+  
+  # Create the QQ plot
+  p <- ggplot(filtered_data, aes(x = expected, y = LOG10P)) +
+    geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), fill = "gray80", alpha = 0.5) +  # Confidence interval
+    geom_point(alpha = 0.6, color = "blue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+    labs(
+      title = paste("Burden Test QQ Plot for ", gene),
+      x = "Expected -log10(p-value)",
+      y = "Observed -log10(p-value)"  # Correct label for the y-axis
+    ) +
+    theme_minimal() 
+  
+  # Print the plot to the PDF (each plot is a new page)
+  print(p)
+}
+
+# Close pdf
+dev.off()
+```
+
+## Not Pure Recessive Genes QQ plot
+
+Make the qq plots for my NOT pure recessive genes
+```{r}
+# First pull pure genes 
+not_genes = gene_selection %>% filter(macarthur_rec == 1,
+                                       analytical_recessive == "Not") %>% 
+  pull(symbol) %>% unique()
+
+# Pull the burden results 
+not_burden = burden_tests %>% filter(symbol %in% not_genes) %>% 
+  dplyr::select(symbol, BETA, SE, LOG10P, SOURCE_FILE)
+
+# Open a pdf to save the plots
+pdf("/oak/stanford/groups/pritch/users/jjudd5/recessive_genes/burden_tests_qqplots/Not Pure Genes Burden Test QQ Plots.pdf", 
+    width = 8, height = 6)
+
+# Loop through pure genes to make QQ plots
+for (gene in not_genes) {
+  
+  
+  # Filter data for the current group
+  filtered_data <- not_burden %>% filter(symbol == gene)
+  
+  # Add expected -log10(p-values) under null hypothesis
+  n <- nrow(filtered_data)
+  filtered_data <- filtered_data %>%
+    arrange(desc(LOG10P)) %>%
+    mutate(
+      expected = -log10(ppoints(n)),  # Expected -log10(p-values)
+      lower_ci = -log10(qbeta(0.025, seq_len(n), rev(seq_len(n)))),  # Lower bound of CI
+      upper_ci = -log10(qbeta(0.975, seq_len(n), rev(seq_len(n))))   # Upper bound of CI
+    )
+  
+  # Create the QQ plot
+  p <- ggplot(filtered_data, aes(x = expected, y = LOG10P)) +
+    geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), fill = "gray80", alpha = 0.5) +  # Confidence interval
+    geom_point(alpha = 0.6, color = "blue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+    labs(
+      title = paste("Burden Test QQ Plot for ", gene),
+      x = "Expected -log10(p-value)",
+      y = "Observed -log10(p-value)"  # Correct label for the y-axis
+    ) +
+    theme_minimal() 
+  
+  # Print the plot to the PDF (each plot is a new page)
+  print(p)
+}
+
+# Close pdf
+dev.off()
+```
+
+
+
+# Supplemental Analyses
+
+Extra analyses that likely aren't going to be main paper figures/analyses, but will still like to keep and probably refine
+
+## Analysing Diseases
+
+Now that I have a list of genes that are breaking and following rules, I want to use the omim data to try to piece together if there is a pattern among the "Pure" and "Not" genes. I specifically will look at the omim data for this
+
+
+### Reset the environment
+I plan to use this segment independent of other larger sections so here is removing transient variables
+```{r}
+#Pick out variables to save
+vars_keeping = c("gene_selection", "burden_tests", "omim")
+
+# Remove everything else
+rm(list = setdiff(ls(), vars_keeping)
+   )
+```
+
+
+### Coding Disease Groups per Gene Group
 
 I want to pull the gene names and align them to omim disesases
 ```{r}
@@ -776,11 +925,14 @@ omim_not_lethal <- omim %>%
 ```
 
 
-# GO and KEGG enrichment
+
+
+
+## GO and KEGG enrichment
 
 Now that I have a list of "Pure" and "Not Pure" macarthur_rec genes, I want to analyze the function and pathways related to these genes. To do that I will perform GO and KEGG enrichment on my "Pure" and "Not Pure" macarthur_rec genes segregated by "Recessive Lethal" status
 
-## Reset the environment
+### Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
 ```{r}
 #Pick out variables to save
@@ -792,7 +944,7 @@ rm(list = setdiff(ls(), vars_keeping)
 ```
 
 
-## Lists of Genes (Entrez IDs)
+### Lists of Genes (Entrez IDs)
 
 The very first thing I want to do is define the separate gene lists I want. I want 4 lists of genes: 
 - Pure Recessive Genes
@@ -844,7 +996,7 @@ not_entrez_lethal = gene_selection %>%
   unique()
 ```
 
-##  GO Enrichment
+###  GO Enrichment
 
 I first want to perform GO enrichment and not separate yet on Molecular Function, Cellular Component, or Biological Process. I can use the genes from the previous chunk
 
@@ -894,7 +1046,7 @@ not_lethal_go <- enrichGO(gene = not_entrez_lethal,
 not_lethal_go = as.data.frame(not_lethal_go)
 ```
 
-## KEGG Enrichment
+### KEGG Enrichment
 
 Using the same gene lists, I want to perform KEGG enrichment, which will highlight pathways of interest
 ```{r}
@@ -933,7 +1085,7 @@ not_lethal_kegg = as.data.frame(not_lethal_kegg)
 
 ```
 
-## Control test
+### Control test
 
 Something I'm immediately worried about is that these enrichments (especially the lysosome results seen in the "Not Pure" category) are biased by the fact that most Recessive genes fall within those categories. I want to run 1 set of GO and KEGG enrichment on all macarthur_rec genes just so I have a baseline understanding of enrichment
 
@@ -970,7 +1122,7 @@ recessive_kegg = as.data.frame(recessive_kegg)
 ```
 
 
-## Save results
+### Save results
 
 I also want to save these dataframes of GO and KEGG results to be viewed later
 ```{r}
@@ -1015,13 +1167,13 @@ write_tsv(not_lethal_kegg,
 
 
 
-# HPO Enrichment
+## HPO Enrichment
 
 Along with GO and KEGG enrichment, which tell me about gene function on cellular, molecular, and pathway things, I want to perform enrichment on phenotypes associated with these genes
 
 I will use this using the Human Phenotype Ontology
 
-## Reset the environment
+### Reset the environment
 I plan to use this segment independent of other larger sections so here is removing transient variables
 ```{r}
 #Pick out variables to save
@@ -1033,7 +1185,7 @@ rm(list = setdiff(ls(), vars_keeping)
 ```
 
 
-## List of Genes
+### List of Genes
 
 I want lists of genes to perform this analysis. I want 5 different lists:
 - All Recessive Genes
@@ -1073,7 +1225,7 @@ not_lethal_names = gene_selection %>%
 ```
 
 
-## HGO Enrichment
+### HGO Enrichment
 
 Now with my lists of gene names, I can perform enrichment on the human phenotype ontology
 
@@ -1097,7 +1249,7 @@ not_pheno <- (PhenoEnrichGenes(genes= not_names, database = phedb))$alldata
 not_lethal_pheno <- (PhenoEnrichGenes(genes= not_lethal_names, database = phedb))$alldata 
 ```
 
-## Save results
+### Save results
 
 I also want to save these dataframes of phenotype enrichment to save and look at
 ```{r}
